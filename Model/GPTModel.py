@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from Model.Block import Block
-import inspect
-import Tokenization.cl100k_enc as cl100k_enc
+import inspect, math
+import Tokenization.encodings as enc
 
 # ----------------------------------------------------------------------
 ## Model setup
@@ -12,14 +12,12 @@ import Tokenization.cl100k_enc as cl100k_enc
 @dataclass
 class GPTConfig:
     block_size: int = 256 # Sequence length
-    vocab_size: int = 65
-    n_layer: int = 6
-    n_head: int = 6
-    n_embd: int = 384
+    vocab_size: int = 50304
+    n_layer: int = 8
+    n_head: int = 8
+    n_embd: int = 512
     dropout: float = 0.0
     bias: bool = True
-
-device = 'cpu'
 
 
 
@@ -45,9 +43,11 @@ class GPT(nn.Module):
         self.lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # weight tying
 
-
         # initialize weights
         self.apply(self._init_weights)
+
+        # Report nubmer of parameters
+        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
 
     def _init_weights(self, module):
@@ -68,8 +68,13 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean, std)
 
+        # Apply special scaled init to residual projections
+        for pn,p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=.0, std=.02/math.sqrt(2*self.config.n_layer))
 
-    def get_params(self, non_embedding=True):
+
+    def get_num_params(self, non_embedding=True):
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
             n_params -= self.transformer.wpe.weight.numel()
@@ -200,3 +205,19 @@ class GPT(nn.Module):
 
         return optimizer
 
+
+    def estimate_mfu(self, fwdbwd_per_iter, dt):
+        """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
+        # first estimate the number of flops we do per iteration.
+        # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
+        N = self.get_num_params()
+        cfg = self.config
+        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
+        flops_per_token = 6*N + 12*L*H*Q*T
+        flops_per_fwdbwd = flops_per_token * T
+        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
+        # express our flops throughput as ratio of A100 bfloat16 peak flops
+        flops_achieved = flops_per_iter * (1.0/dt) # per second
+        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        mfu = flops_achieved / flops_promised
+        return mfu
