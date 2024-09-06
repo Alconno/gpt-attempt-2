@@ -12,13 +12,49 @@ import tiktoken
 from datasets import load_dataset  # pip install datasets
 from tqdm import tqdm  # pip install tqdm
 import sys
-
+import pickle
 
 # Add main directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
+
+def load_shard(shard_path):
+    # Load the numpy array containing tokens from the shard
+    return np.load(shard_path)
+
+def create_meta_file(shard_dir, meta_file_path):
+    # Initialize a set to store unique tokens across all shards
+    global_vocab = set()
+
+    # List all the shard files in the directory
+    shard_files = [f for f in os.listdir(shard_dir) if f.endswith('.npy')]
+    
+    # Process each shard and extract unique tokens
+    for shard_file in shard_files:
+        shard_path = os.path.join(shard_dir, shard_file)
+        tokens = load_shard(shard_path)
+        global_vocab.update(tokens)  # Add unique tokens from the shard
+
+    # Calculate the total vocabulary size
+    vocab_size = len(global_vocab)
+
+    # Create metadata dictionary
+    meta = {
+        'vocab_size': vocab_size,
+        'shard_count': len(shard_files),
+    }
+
+    # Save the metadata as a pickle file
+    with open(meta_file_path, 'wb') as f:
+        pickle.dump(meta, f)
+    
+    print(f"\nMetadata saved to {meta_file_path} with vocab_size = {vocab_size}")
+
+
+
+
 # init the tokenizer
-from Tokenization.cl100k_enc import enc
+from Tokenization.encodings import enc
 sot = enc._special_tokens['<|startoftext|>'] # start of text token
 eot = enc._special_tokens['<|endoftext|>'] # end of text token
 
@@ -32,8 +68,10 @@ def tokenize(doc):
     tokens_np_uint32 = tokens_np.astype(np.uint32)
     return tokens_np_uint32
 
+
 def write_datafile(filename, tokens_np):
     np.save(filename, tokens_np)
+
 
 def create_shards(local_dir_name, HW_dataset, remote_name, file_dataset, shard_size=1e8):
     # Check if local_dir is valid and if it exists
@@ -105,14 +143,30 @@ def create_shards(local_dir_name, HW_dataset, remote_name, file_dataset, shard_s
             write_datafile(filename, all_tokens_np[:token_count])
 
 
+
+
 if __name__ == '__main__':
     mp.freeze_support()        
     
+    local_dir_name = "inputData";
+    shard_training_data_root = f"Shards/{local_dir_name}";
+
+
+
     # text file shardifying
-    create_shards("inputData", "", "", "input.txt", 1e4)
+    create_shards(local_dir_name, "", "", "input.txt", 1e4)
 
     # Hugging face dataset shardifying
     #create_shards("edu_fineweb10B", "HuggingFaceFW/fineweb-edu", "sample-10BT", "")
 
     print("Shard creation completed")
+
+
+
+
+    # meta.pkl creation
+    shard_dir = shard_training_data_root  # Directory containing your shards
+    meta_file_path = shard_training_data_root + '/meta.pkl'  # Path to save the meta.pkl file
+    create_meta_file(shard_dir, meta_file_path)
+
 

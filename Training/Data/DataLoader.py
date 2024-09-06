@@ -27,6 +27,7 @@ class DataLoader:
         assert len(shards) > 0, f"No shards found for split {split}"
         if master_process:
             print(f"Found {len(shards)} shards for split {split}")
+        self.reset()
     
     def reset(self):
         # initialize at shard zero
@@ -41,7 +42,7 @@ class DataLoader:
         x = (buf[:-1]).view(B, T) # inputs (everything except last character)
         y = (buf[1:]).view(B, T) # targets (everything except first character)
         
-        # adva  nce the position in the tensor
+        # advance the position in the tensor
         self.current_position += self.advancement
 
         # if loading the next batch would be out of bounds, advance to next shard
